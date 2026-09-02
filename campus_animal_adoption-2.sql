@@ -292,6 +292,8 @@ CREATE TABLE `report_type` (
 
 --
 -- Table structure for table `treatment`
+---- --------------------------------------------------------
+-- Table structure for table `treatment`
 --
 
 CREATE TABLE `treatment` (
@@ -299,10 +301,9 @@ CREATE TABLE `treatment` (
   `vet_id` int(11) NOT NULL,
   `animal_id` int(11) NOT NULL,
   `treatment_time` datetime NOT NULL,
-  `treatment_type` enum('vaccination','surgery','medication','other') NOT NULL,
+  `treatment_type` enum('vaccination','surgery','medication','others') NOT NULL,
   `status` enum('ongoing','completed','cancelled') NOT NULL DEFAULT 'ongoing',
-  `medication` varchar(200) DEFAULT NULL,
-  `others` varchar(500) DEFAULT NULL
+  `medicine_name` varchar(200) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -310,11 +311,13 @@ CREATE TABLE `treatment` (
 --
 -- Table structure for table `treatment_description`
 --
+-- --------------------------------------------------------
+-- Table structure for table `treatment_description`
+--
 
 CREATE TABLE `treatment_description` (
-  `description_id` int(11) NOT NULL,
   `treatment_id` int(11) NOT NULL,
-  `description` text NOT NULL
+  `description` varchar(500) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -528,9 +531,9 @@ ALTER TABLE `treatment`
 --
 -- Indexes for table `treatment_description`
 --
+
 ALTER TABLE `treatment_description`
-  ADD PRIMARY KEY (`description_id`),
-  ADD KEY `fk_treatmentdesc_treatment` (`treatment_id`);
+  ADD PRIMARY KEY (`treatment_id`,`description`);
 
 --
 -- Indexes for table `users`
@@ -624,11 +627,7 @@ ALTER TABLE `report_type`
 ALTER TABLE `treatment`
   MODIFY `treatment_id` int(11) NOT NULL AUTO_INCREMENT;
 
---
--- AUTO_INCREMENT for table `treatment_description`
---
-ALTER TABLE `treatment_description`
-  MODIFY `description_id` int(11) NOT NULL AUTO_INCREMENT;
+
 
 --
 -- AUTO_INCREMENT for table `users`
@@ -732,8 +731,10 @@ ALTER TABLE `treatment`
 --
 -- Constraints for table `treatment_description`
 --
+
 ALTER TABLE `treatment_description`
-  ADD CONSTRAINT `fk_treatmentdesc_treatment` FOREIGN KEY (`treatment_id`) REFERENCES `treatment` (`treatment_id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `fk_treatmentdesc_treatment`
+  FOREIGN KEY (`treatment_id`) REFERENCES `treatment` (`treatment_id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `volunteer_stats`
