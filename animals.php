@@ -1,5 +1,5 @@
-
 <?php
+
 require 'auth.php';
 require_login();
 require 'db.php';
@@ -7,114 +7,199 @@ require 'layout.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
+    verify_csrf();
+
     $name = trim($_POST['name'] ?? '');
     $species = trim($_POST['species'] ?? '');
     $location = trim($_POST['location_found'] ?? '');
-    $age = (int)($_POST['age'] ?? 0);
-    $gender = trim($_POST['gender'] ?? 'Unknown');
+
+    $ageRaw = trim($_POST['age'] ?? '');
+    $age = $ageRaw === '' ? null : max(0, (int)$ageRaw);
+
+    $gender = $_POST['gender'] ?? 'Unknown';
     $status = $_POST['status'] ?? 'reported';
+
     $pattern = trim($_POST['pattern'] ?? '');
     $body = trim($_POST['body_colour'] ?? '');
     $eye = trim($_POST['eye_colour'] ?? '');
-    $photo = null;
+
+    $uid = (int)$_SESSION['user_id'];
+
+    $allowedStatuses = [
+        'reported',
+        'rescued',
+        'under_treatment',
+        'available',
+        'adopted'
+    ];
+
+    $allowedGenders = [
+        'Female',
+        'Male',
+        'Unknown'
+    ];
 
     if (
-        isset($_FILES['photo']) &&
-        $_FILES['photo']['error'] === UPLOAD_ERR_OK
+        $name === '' ||
+        $species === '' ||
+        $location === '' ||
+        !in_array($status, $allowedStatuses, true) ||
+        !in_array($gender, $allowedGenders, true)
     ) {
-        $ext = strtolower(
-            pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION)
+        redirect_with_message(
+            'animals.php',
+            'Please complete the required animal information.'
         );
-
-        if (in_array($ext, ['jpg', 'jpeg', 'png', 'webp'])) {
-            $photo = uniqid('animal_', true) . '.' . $ext;
-
-            move_uploaded_file(
-                $_FILES['photo']['tmp_name'],
-                __DIR__ . '/uploads/' . $photo
-            );
-        }
     }
 
-    $uid = $_SESSION['user_id'];
+    $conn->begin_transaction();
 
-    $stmt = $conn->prepare(
-        'INSERT INTO animal
-        (
-            species,
-            location_found,
-            age,
-            date_registered,
-            gender,
-            name,
-            status,
-            pattern,
-            body_colour,
-            user_id,
-            eye_colour,
-            photo
-        )
-        VALUES
-        (
-            ?, ?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?
-        )'
-    );
+    try {
 
-    $stmt->bind_param(
-        'ssisssssiss',
-        $species,
-        $location,
-        $age,
-        $gender,
-        $name,
-        $status,
-        $pattern,
-        $body,
-        $uid,
-        $eye,
-        $photo
-    );
+        $stmt = $conn->prepare(
+            'INSERT INTO animal(
+                species,
+                location_found,
+                age,
+                date_registered,
+                gender,
+                name,
+                status,
+                pattern,
+                body_colour,
+                user_id,
+                eye_colour
+            )
+            VALUES(
+                ?, ?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?
+            )'
+        );
 
-    $stmt->execute();
+        $stmt->bind_param(
+            'ssisssssis',
+            $species,
+            $location,
+            $age,
+            $gender,
+            $name,
+            $status,
+            $pattern,
+            $body,
+            $uid,
+            $eye
+        );
 
-    $aid = $conn->insert_id;
+        $stmt->execute();
 
-    $h = $conn->prepare(
-        'INSERT INTO animal_status_history
-        (animal_id, status, changed_by)
-        VALUES (?, ?, ?)'
-    );
+        $aid = $conn->insert_id;
 
-    $h->bind_param(
-        'isi',
-        $aid,
-        $status,
-        $uid
-    );
+        $hist = $conn->prepare(
+            'INSERT INTO animal_status_history(
+                animal_id,
+                status,
+                changed_by
+            )
+            VALUES(?,?,?)'
+        );
 
-    $h->execute();
+        $hist->bind_param(
+            'isi',
+            $aid,
+            $status,
+            $uid
+        );
 
-    header(
-        'Location: animals.php?msg=' .
-        urlencode('Animal registered successfully.')
-    );
+        $hist->execute();
 
-    exit;
+        $conn->commit();
+
+        redirect_with_message(
+            'animals.php',
+            'Animal registered successfully.'
+        );
+
+    } catch (Throwable $e) {
+
+        $conn->rollback();
+        throw $e;
+    }
 }
 
-$animals = $conn->query(
-    'SELECT
-        a.*,
-        u.full_name
-     FROM animal a
-     JOIN users u
+
+/* ---------------- SEARCH AND FILTER ---------------- */
+
+$q = trim($_GET['q'] ?? '');
+$statusFilter = $_GET['status'] ?? '';
+
+$sql = '
+    SELECT a.*, u.full_name
+    FROM animal a
+    JOIN users u
         ON a.user_id = u.user_id
-     ORDER BY a.animal_id DESC'
-);
+    WHERE 1=1
+';
+
+$params = [];
+$types = '';
+
+if ($q !== '') {
+
+    $sql .= '
+        AND (
+            a.name LIKE ?
+            OR a.species LIKE ?
+            OR a.location_found LIKE ?
+        )
+    ';
+
+    $like = "%$q%";
+
+    $params = [
+        $like,
+        $like,
+        $like
+    ];
+
+    $types .= 'sss';
+}
+
+if (
+    $statusFilter !== '' &&
+    in_array(
+        $statusFilter,
+        [
+            'reported',
+            'rescued',
+            'under_treatment',
+            'available',
+            'adopted'
+        ],
+        true
+    )
+) {
+
+    $sql .= ' AND a.status=?';
+
+    $params[] = $statusFilter;
+    $types .= 's';
+}
+
+$sql .= ' ORDER BY a.animal_id DESC';
+
+$stmt = $conn->prepare($sql);
+
+if ($params) {
+    $stmt->bind_param($types, ...$params);
+}
+
+$stmt->execute();
+
+$animals = $stmt->get_result();
 
 page_top('Animals');
 
 ?>
+
 
 <div class="section-head">
 
@@ -122,95 +207,153 @@ page_top('Animals');
         Animals
     </h1>
 
-    <a
-        class="btn secondary"
-        href="#add"
-    >
+    <a class="btn secondary" href="#add">
         + Register Animal
     </a>
 
 </div>
 
 
+<form class="filter-bar" method="get">
+
+    <input
+        name="q"
+        value="<?=h($q)?>"
+        placeholder="Search name, species or location"
+    >
+
+    <select name="status">
+
+        <option value="">
+            All statuses
+        </option>
+
+        <?php
+        foreach (
+            [
+                'reported' => 'Reported',
+                'rescued' => 'Rescued',
+                'under_treatment' => 'Under treatment',
+                'available' => 'Available',
+                'adopted' => 'Adopted'
+            ]
+            as $v => $label
+        ):
+        ?>
+
+            <option
+                value="<?=$v?>"
+                <?=$statusFilter === $v ? 'selected' : ''?>
+            >
+                <?=$label?>
+            </option>
+
+        <?php endforeach; ?>
+
+    </select>
+
+    <button class="btn small">
+        Search
+    </button>
+
+    <a
+        class="btn small secondary"
+        href="animals.php"
+    >
+        Reset
+    </a>
+
+</form>
+
+
 <div class="grid">
+
+<?php if ($animals->num_rows === 0): ?>
+
+    <div class="empty card">
+        No animals found.
+    </div>
+
+<?php endif; ?>
+
 
 <?php while ($a = $animals->fetch_assoc()): ?>
 
-    <article class="card animal-card">
+<article class="card animal-card">
 
-        <img
-            src="<?= h(
-                $a['photo']
-                    ? 'uploads/' . $a['photo']
-                    : 'assets/cat-logo.png'
-            ) ?>"
+    <h3>
+
+        <?=h($a['name'])?>
+
+        <span class="tag">
+            <?=h($a['species'])?>
+        </span>
+
+    </h3>
+
+    <p>
+
+        <b>Status:</b>
+        <?=h(str_replace('_', ' ', $a['status']))?>
+
+        <br>
+
+        <b>Gender:</b>
+        <?=h($a['gender'])?>
+
+        ·
+
+        <b>Age:</b>
+        <?=h(
+            $a['age'] === null
+            ? 'Unknown'
+            : $a['age']
+        )?>
+
+        <br>
+
+        <b>Found:</b>
+        <?=h($a['location_found'])?>
+
+    </p>
+
+    <p class="muted">
+
+        Registered by
+        <?=h($a['full_name'])?>
+
+    </p>
+
+
+    <div class="actions">
+
+        <a
+            class="btn small secondary"
+            href="animal.php?id=<?=$a['animal_id']?>"
         >
+            View details
+        </a>
 
-        <h3>
 
-            <?= h($a['name']) ?>
-
-            <span class="tag">
-                <?= h($a['species']) ?>
-            </span>
-
-        </h3>
-
-        <p>
-
-            <b>Status:</b>
-            <?= h(
-                str_replace(
-                    '_',
-                    ' ',
-                    $a['status']
-                )
-            ) ?>
-
-            <br>
-
-            <b>Gender:</b>
-            <?= h($a['gender']) ?>
-
-            ·
-
-            <b>Age:</b>
-            <?= h($a['age'] ?: 'Unknown') ?>
-
-            <br>
-
-            <b>Found:</b>
-            <?= h($a['location_found']) ?>
-
-        </p>
-
-        <p class="muted">
-            Registered by <?= h($a['full_name']) ?>
-        </p>
-
-        <div class="actions">
-
-            <a
-                class="btn small secondary"
-                href="animal.php?id=<?= $a['animal_id'] ?>"
-            >
-                View details
-            </a>
+        <?php if ($a['status'] === 'available'): ?>
 
             <a
                 class="btn small"
-                href="adoptions.php?animal_id=<?= $a['animal_id'] ?>"
+                href="adoptions.php?animal_id=<?=$a['animal_id']?>"
             >
                 Adopt
             </a>
 
-        </div>
+        <?php endif; ?>
 
-    </article>
+    </div>
+
+</article>
 
 <?php endwhile; ?>
 
 </div>
+
 
 
 <div
@@ -228,27 +371,34 @@ page_top('Animals');
 <form
     class="form-card form-grid"
     method="post"
-    enctype="multipart/form-data"
 >
+
+    <?=csrf_field()?>
+
 
     <input
         name="name"
         placeholder="Animal name"
         required
+        maxlength="200"
     >
+
 
     <input
         name="species"
         placeholder="Species (Cat/Dog/etc.)"
         required
+        maxlength="100"
     >
+
 
     <input
         type="number"
         min="0"
         name="age"
-        placeholder="Age"
+        placeholder="Age (optional)"
     >
+
 
     <select name="gender">
 
@@ -258,12 +408,15 @@ page_top('Animals');
 
     </select>
 
+
     <input
         class="full"
         name="location_found"
         placeholder="Location found"
         required
+        maxlength="500"
     >
+
 
     <select name="status">
 
@@ -283,43 +436,39 @@ page_top('Animals');
             Available for adoption
         </option>
 
-        <option value="adopted">
-            Adopted
-        </option>
+        <?php if (is_volunteer()): ?>
+
+            <option value="adopted">
+                Adopted
+            </option>
+
+        <?php endif; ?>
 
     </select>
+
 
     <input
         name="pattern"
         placeholder="Pattern"
+        maxlength="200"
     >
+
 
     <input
         name="body_colour"
         placeholder="Body colour"
+        maxlength="100"
     >
+
 
     <input
         name="eye_colour"
         placeholder="Eye colour"
+        maxlength="100"
     >
 
-    <label class="full">
 
-        Photo
-
-        <input
-            type="file"
-            name="photo"
-            accept="image/*"
-        >
-
-    </label>
-
-    <button
-        class="btn full"
-        type="submit"
-    >
+    <button class="btn full">
         Save Animal
     </button>
 
